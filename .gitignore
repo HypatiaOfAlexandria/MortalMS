@@ -1,5 +1,6 @@
 ﻿/logs/**
 .idea/
+.vscode/
 configuration.ini
 
 # build files
