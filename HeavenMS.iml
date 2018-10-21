@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="JAVA_MODULE" version="4">
+  <component name="NewModuleRootManager" inherit-compiler-output="true">
+    <exclude-output />
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
+    </content>
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+    <orderEntry type="library" name="mysql-connector-java-bin6" level="project" />
+    <orderEntry type="library" name="mysql-connector-java-bin1" level="project" />
+    <orderEntry type="library" name="mysql-connector-java-bin10" level="project" />
+    <orderEntry type="library" name="lib" level="project" />
+    <orderEntry type="library" name="mysql-connector-java-bin" level="project" />
+    <orderEntry type="library" name="mysql-connector-java-bin5" level="project" />
+    <orderEntry type="library" name="mysql-connector-java-bin8" level="project" />
+    <orderEntry type="library" name="cores" level="project" />
+    <orderEntry type="library" name="mysql-connector-java-bin2" level="project" />
+    <orderEntry type="library" name="mysql-connector-java-bin4" level="project" />
+    <orderEntry type="library" name="mysql-connector-java-bin3" level="project" />
+    <orderEntry type="library" name="mysql-connector-java-bin7" level="project" />
+    <orderEntry type="library" name="mysql-connector-java-bin9" level="project" />
+  </component>
+</module>

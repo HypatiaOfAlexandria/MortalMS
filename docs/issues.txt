@@ -1,0 +1,73 @@
+========== HeavenMS ==========
+Credits:
+Ronan - Head Developer
+Vcoc - Freelance Developer
+
+---------------------------
+Known issues:
+- Everytime two people click on an npc at the same time, one of them dcs and the other needs to @dispose to talk to the npc.
+- If multiple people hit boxes/reactors at the same time, they both dc with invalid pointer error.
+- Some criticals (e.g. from Aran skills) will not show up as crit for other players.
+- Deadlocks may start appearing if the server stays online long enough with many players logged in.
+- If there are multiple bosses that shows HPBar on the map, if a player hits more than one the HPBar may start flickering on the screen.
+- Sometimes battleship may behave oddly with the enhanced buff system, making the character d/c in certain scenarios.
+- Dragon Roar doesn't show the stun effect to players.
+- Some monster status such as freeze and weapon/magic reflect doesn't behave properly in certain scenarios. Freeze seems to not work on mobs with low OID or are starters from server boot time.
+- On low-end connections, things such as command summoning a player that is currently logging in (already visible to other players) may cause the player to freeze, consequently freezing the account as well since the server-side disconnection doesn't happen.
+---------------------------
+
+---------------------------
+Missing features list:
+- Miniroom tooltips (such as number of players in store/host awaiting game) not showing up properly.
+- Change name/World transfer.
+- Some pirate skills doesn't work for 3rd parties.
+- Cache frequently used SQL data.
+- Pet commands are not being propagated to 3rd parties, and the commandResponse packet function seems somewhat wonky.
+- Pet speed.
+---------------------------
+
+
+---------------------------
+** Others **
+- Family system
+- MTS
+---------------------------
+
+
+---------------------------
+** Quest **
+- Family & Medal quests.
+---------------------------
+
+
+---------------------------
+** Basic PQs **
+---------------------------
+
+
+---------------------------
+** Packet issues & advanced PQs **
+- Mystic Doors (won't deploy players properly is some situations, only destination map matches).
+- Ariant Party Quest
+- Monster Carnival 1/2 Party Quest
+- Nett's Pyramid Party Quest
+---------------------------
+
+
+---------------------------
+** Skills **
+- Check autoban system
+---------------------------
+
+
+---------------------------
+** Jobs **
+---------------------------
+
+
+---------------------------
+** System **
+- Update Java version
+---------------------------
+
+====================================

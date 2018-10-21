@@ -1,0 +1,442 @@
+/*
+This file is part of the OdinMS Maple Story Server
+Copyright (C) 2008 Patrick Huy <patrick.huy@frz.cc>
+Matthias Butz <matze@odinms.de>
+Jan Christian Meyer <vimes@odinms.de>
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation version 3 as published by
+the Free Software Foundation. You may not use, modify or distribute
+this program under any other version of the GNU Affero General Public
+License.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+package net.server.channel.handlers;
+
+import client.*;
+import client.inventory.*;
+import constants.GameConstants;
+import constants.ServerConstants;
+import java.net.InetSocketAddress;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.*;
+import java.util.Map.Entry;
+import net.AbstractMaplePacketHandler;
+import net.server.PlayerBuffValueHolder;
+import net.server.Server;
+import net.server.channel.Channel;
+import net.server.channel.CharacterIdChannelPair;
+import net.server.coordinator.MapleEventRecallCoordinator;
+import net.server.coordinator.MapleSessionCoordinator;
+import net.server.guild.MapleAlliance;
+import net.server.guild.MapleGuild;
+import net.server.world.MaplePartyCharacter;
+import net.server.world.PartyOperation;
+import net.server.world.World;
+import org.apache.mina.core.session.IoSession;
+import scripting.event.EventInstanceManager;
+import server.life.MobSkill;
+import tools.DatabaseConnection;
+import tools.MaplePacketCreator;
+import tools.Pair;
+import tools.data.input.SeekableLittleEndianAccessor;
+import tools.packets.Wedding;
+
+public final class PlayerLoggedinHandler extends AbstractMaplePacketHandler {
+
+    @Override
+    public final boolean validateState(MapleClient c) {
+        return !c.isLoggedIn();
+    }
+
+    @Override
+    public final void handlePacket(SeekableLittleEndianAccessor slea, MapleClient c) {
+        final int cid = slea.readInt();
+        final Server server = Server.getInstance();
+        MapleCharacter player = c.getWorldServer().getPlayerStorage().getCharacterById(cid);
+        boolean newcomer = false;
+        if (player == null) {
+            IoSession session = c.getSession();
+
+            if (!server.validateCharacteridInTransition(
+                    (InetSocketAddress) session.getRemoteAddress(), cid)) {
+                c.disconnect(true, false);
+                return;
+            }
+
+            if (ServerConstants.DETERRED_MULTICLIENT) {
+                String remoteHwid =
+                        MapleSessionCoordinator.getInstance().getGameSessionHwid(session);
+                if (remoteHwid == null) {
+                    c.disconnect(true, false);
+                    return;
+                }
+
+                session.setAttribute(MapleClient.CLIENT_HWID, remoteHwid);
+            }
+
+            try {
+                player = MapleCharacter.loadCharFromDB(cid, c, true);
+                newcomer = true;
+            } catch (SQLException e) {
+                e.printStackTrace();
+            }
+        } else {
+            c.setCharacterSlots((byte) player.getClient().getCharacterSlots());
+            player.newClient(c);
+        }
+        if (player
+                == null) { // If you are still getting null here then please just uninstall the game
+            // >.>, we dont need you fucking with the logs
+            c.disconnect(true, false);
+            return;
+        }
+
+        c.setPlayer(player);
+        c.setAccID(player.getAccountID());
+
+        int state = c.getLoginState();
+        boolean allowLogin = true;
+
+        World world = server.getWorld(c.getWorld());
+        if (world == null) {
+            c.disconnect(true, false);
+            return;
+        }
+
+        Channel cserv = world.getChannel(c.getChannel());
+        if (cserv == null) {
+            c.setChannel(1);
+            cserv = world.getChannel(c.getChannel());
+
+            if (cserv == null) {
+                c.disconnect(true, false);
+                return;
+            }
+        }
+
+        /*  is this check really necessary?
+        if (state == MapleClient.LOGIN_SERVER_TRANSITION || state == MapleClient.LOGIN_NOTLOGGEDIN) {
+            List<String> charNames = c.loadCharacterNames(c.getWorld());
+            if(!newcomer) {
+                charNames.remove(player.getName());
+            }
+
+            for (String charName : charNames) {
+                if(c.getWorldServer().getPlayerStorage().getCharacterByName(charName) != null) {
+                    allowLogin = false;
+                    break;
+                }
+            }
+        }
+        */
+
+        if (state != MapleClient.LOGIN_SERVER_TRANSITION || !allowLogin) {
+            c.setPlayer(null);
+            c.announce(MaplePacketCreator.getAfterLoginError(7));
+            return;
+        }
+        c.updateLoginState(MapleClient.LOGIN_LOGGEDIN);
+
+        cserv.addPlayer(player);
+        world.addPlayer(player);
+        player.setEnteredChannelWorld();
+
+        List<PlayerBuffValueHolder> buffs = server.getPlayerBuffStorage().getBuffsFromStorage(cid);
+        if (buffs != null) {
+            List<Pair<Long, PlayerBuffValueHolder>> timedBuffs = getLocalStartTimes(buffs);
+            player.silentGiveBuffs(timedBuffs);
+        }
+
+        Map<MapleDisease, Pair<Long, MobSkill>> diseases =
+                server.getPlayerBuffStorage().getDiseasesFromStorage(cid);
+        if (diseases != null) {
+            player.silentApplyDiseases(diseases);
+        }
+
+        c.announce(MaplePacketCreator.getCharInfo(player));
+        if (!player.isHidden()) {
+            if (player.isGM() && ServerConstants.USE_AUTOHIDE_GM) {
+                player.toggleHide(true);
+            }
+        }
+        player.sendKeymap();
+        player.sendMacros();
+
+        // pot bindings being passed through other characters on the account detected thanks to
+        // Croosade dev team
+        MapleKeyBinding autohpPot = player.getKeymap().get(91);
+        player.announce(
+                MaplePacketCreator.sendAutoHpPot(autohpPot != null ? autohpPot.getAction() : 0));
+
+        MapleKeyBinding autompPot = player.getKeymap().get(92);
+        player.announce(
+                MaplePacketCreator.sendAutoMpPot(autompPot != null ? autompPot.getAction() : 0));
+
+        player.getMap().addPlayer(player);
+        player.visitMap(player.getMap());
+
+        BuddyList bl = player.getBuddylist();
+        int[] buddyIds = bl.getBuddyIds();
+        world.loggedOn(player.getName(), player.getId(), c.getChannel(), buddyIds);
+        for (CharacterIdChannelPair onlineBuddy : world.multiBuddyFind(player.getId(), buddyIds)) {
+            BuddylistEntry ble = bl.get(onlineBuddy.getCharacterId());
+            ble.setChannel(onlineBuddy.getChannel());
+            bl.put(ble);
+        }
+        c.announce(MaplePacketCreator.updateBuddylist(bl.getBuddies()));
+
+        c.announce(MaplePacketCreator.loadFamily(player));
+        if (player.getFamilyId() > 0) {
+            MapleFamily f = world.getFamily(player.getFamilyId());
+            if (f == null) {
+                f = new MapleFamily(player.getId());
+                world.addFamily(player.getFamilyId(), f);
+            }
+            player.setFamily(f);
+            c.announce(MaplePacketCreator.getFamilyInfo(MapleFamily.getMember(player.getId())));
+        }
+        if (player.getGuildId() > 0) {
+            MapleGuild playerGuild =
+                    server.getGuild(player.getGuildId(), player.getWorld(), player);
+            if (playerGuild == null) {
+                player.deleteGuild(player.getGuildId());
+                player.getMGC().setGuildId(0);
+            } else {
+                playerGuild.getMGC(player.getId()).setCharacter(player);
+                player.setMGC(playerGuild.getMGC(player.getId()));
+                server.setGuildMemberOnline(player, true, c.getChannel());
+                c.announce(MaplePacketCreator.showGuildInfo(player));
+                int allianceId = player.getGuild().getAllianceId();
+                if (allianceId > 0) {
+                    MapleAlliance newAlliance = server.getAlliance(allianceId);
+                    if (newAlliance == null) {
+                        newAlliance = MapleAlliance.loadAlliance(allianceId);
+                        if (newAlliance != null) {
+                            server.addAlliance(allianceId, newAlliance);
+                        } else {
+                            player.getGuild().setAllianceId(0);
+                        }
+                    }
+                    if (newAlliance != null) {
+                        c.announce(MaplePacketCreator.updateAllianceInfo(newAlliance, c));
+                        c.announce(
+                                MaplePacketCreator.allianceNotice(
+                                        newAlliance.getId(), newAlliance.getNotice()));
+
+                        if (newcomer) {
+                            server.allianceMessage(
+                                    allianceId,
+                                    MaplePacketCreator.allianceMemberOnline(player, true),
+                                    player.getId(),
+                                    -1);
+                        }
+                    }
+                }
+            }
+        }
+
+        player.showNote();
+        if (player.getParty() != null) {
+            MaplePartyCharacter pchar = player.getMPC();
+
+            // Use this in case of enabling party HPbar HUD when logging in, however "you created a
+            // party" will appear on chat.
+            // c.announce(MaplePacketCreator.partyCreated(pchar));
+
+            pchar.setChannel(c.getChannel());
+            pchar.setMapId(player.getMapId());
+            pchar.setOnline(true);
+            world.updateParty(player.getParty().getId(), PartyOperation.LOG_ONOFF, pchar);
+            player.updatePartyMemberHP();
+        }
+
+        MapleInventory eqpInv = player.getInventory(MapleInventoryType.EQUIPPED);
+        eqpInv.lockInventory();
+        try {
+            for (Item it : eqpInv.list()) {
+                player.equippedItem((Equip) it);
+            }
+        } finally {
+            eqpInv.unlockInventory();
+        }
+
+        c.announce(MaplePacketCreator.updateBuddylist(player.getBuddylist().getBuddies()));
+
+        CharacterNameAndId pendingBuddyRequest = c.getPlayer().getBuddylist().pollPendingRequest();
+        if (pendingBuddyRequest != null) {
+            c.announce(
+                    MaplePacketCreator.requestBuddylistAdd(
+                            pendingBuddyRequest.getId(),
+                            c.getPlayer().getId(),
+                            pendingBuddyRequest.getName()));
+        }
+
+        if (newcomer) {
+            for (MaplePet pet : player.getPets()) {
+                if (pet != null) world.registerPetHunger(player, player.getPetIndex(pet));
+            }
+
+            player.reloadQuestExpirations();
+        }
+
+        c.announce(MaplePacketCreator.updateGender(player));
+        player.checkMessenger();
+        c.announce(MaplePacketCreator.enableReport());
+        player.changeSkillLevel(
+                SkillFactory.getSkill(10000000 * player.getJobType() + 12),
+                (byte) (player.getLinkedLevel() / 10),
+                20,
+                -1);
+        player.checkBerserk(player.isHidden());
+
+        if (newcomer) {
+            /*
+            if (!c.hasVotedAlready()){
+            	player.announce(MaplePacketCreator.earnTitleMessage("You can vote now! Vote and earn a vote point!"));
+            }
+            */
+            if (player.isGM()) {
+                Server.getInstance()
+                        .broadcastGMMessage(
+                                c.getWorld(),
+                                MaplePacketCreator.earnTitleMessage(
+                                        (player.gmLevel() < 6 ? "GM " : "Admin ")
+                                                + player.getName()
+                                                + " has logged in"));
+            }
+
+            if (diseases != null) {
+                for (Entry<MapleDisease, Pair<Long, MobSkill>> e : diseases.entrySet()) {
+                    final List<Pair<MapleDisease, Integer>> debuff =
+                            Collections.singletonList(
+                                    new Pair<>(e.getKey(), e.getValue().getRight().getX()));
+                    c.announce(MaplePacketCreator.giveDebuff(debuff, e.getValue().getRight()));
+                }
+
+                player.announceDiseases();
+            }
+        } else {
+            if (player.isRidingBattleship()) {
+                player.announceBattleshipHp();
+            }
+        }
+
+        player.buffExpireTask();
+        player.diseaseExpireTask();
+        player.skillCooldownTask();
+        player.expirationTask();
+        player.questExpirationTask();
+        if (GameConstants.hasSPTable(player.getJob()) && player.getJob().getId() != 2001) {
+            player.createDragon();
+        }
+
+        player.commitExcludedItems();
+        showDueyNotification(c, player);
+
+        if (player.getMap().getHPDec() > 0) player.resetHpDecreaseTask();
+
+        player.resetPlayerRates();
+        if (ServerConstants.USE_ADD_RATES_BY_LEVEL == true) player.setPlayerRates();
+        player.setWorldRates();
+        player.updateCouponRates();
+
+        player.receivePartyMemberHP();
+
+        if (player.getPartnerId() > 0) {
+            int partnerId = player.getPartnerId();
+            final MapleCharacter partner =
+                    c.getWorldServer().getPlayerStorage().getCharacterById(partnerId);
+
+            if (partner != null && !partner.isAwayFromWorld()) {
+                player.announce(
+                        Wedding.OnNotifyWeddingPartnerTransfer(partnerId, partner.getMapId()));
+                partner.announce(
+                        Wedding.OnNotifyWeddingPartnerTransfer(player.getId(), player.getMapId()));
+            }
+        }
+
+        if (newcomer) {
+            EventInstanceManager eim =
+                    MapleEventRecallCoordinator.getInstance().recallEventInstance(cid);
+            if (eim != null) {
+                eim.registerPlayer(player);
+            }
+        }
+    }
+
+    private static void showDueyNotification(MapleClient c, MapleCharacter player) {
+        Connection con = null;
+        PreparedStatement ps = null;
+        PreparedStatement pss = null;
+        ResultSet rs = null;
+        try {
+            con = DatabaseConnection.getConnection();
+            ps =
+                    con.prepareStatement(
+                            "SELECT Mesos FROM dueypackages WHERE ReceiverId = ? and Checked = 1");
+            ps.setInt(1, player.getId());
+            rs = ps.executeQuery();
+            if (rs.next()) {
+                try {
+                    Connection con2 = DatabaseConnection.getConnection();
+                    pss =
+                            con2.prepareStatement(
+                                    "UPDATE dueypackages SET Checked = 0 where ReceiverId = ?");
+                    pss.setInt(1, player.getId());
+                    pss.executeUpdate();
+                    pss.close();
+                    con2.close();
+                } catch (SQLException e) {
+                    e.printStackTrace();
+                }
+
+                c.announce(MaplePacketCreator.sendDueyNotification(false));
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                if (rs != null) {
+                    rs.close();
+                }
+                if (pss != null) {
+                    pss.close();
+                }
+                if (ps != null) {
+                    ps.close();
+                }
+                if (con != null) {
+                    con.close();
+                }
+            } catch (SQLException ex) {
+                ex.printStackTrace();
+            }
+        }
+    }
+
+    private static List<Pair<Long, PlayerBuffValueHolder>> getLocalStartTimes(
+            List<PlayerBuffValueHolder> lpbvl) {
+        List<Pair<Long, PlayerBuffValueHolder>> timedBuffs = new ArrayList<>();
+        long curtime = currentServerTime();
+
+        for (PlayerBuffValueHolder pb : lpbvl) {
+            timedBuffs.add(new Pair<>(curtime - pb.usedTime, pb));
+        }
+
+        timedBuffs.sort(Comparator.comparing(Pair::getLeft));
+
+        return timedBuffs;
+    }
+}
