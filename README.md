@@ -1,4 +1,4 @@
-# HeavenMS
+# MortalMS
 
 [![License](https://img.shields.io/badge/license-AGPL%20v3%2B-brightgreen.svg)](https://www.gnu.org/licenses/agpl-3.0.html)
 [![Java standard](https://img.shields.io/badge/Java-10+-blue.svg)](https://en.wikipedia.org/wiki/Java_version_history#Java_SE_10)
